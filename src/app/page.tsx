@@ -114,10 +114,10 @@ export default function Dashboard() {
 
     // OUVINTE DE TEMPO REAL: Fica escutando qualquer clique de vocês dois no banco
     const canalTarefas = supabase.channel('mudancas-banco')
-      .on('postgres', { event: '*', schema: 'public', table: 'tarefas' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tarefas' }, () => {
         buscarTarefas()
       })
-      .on('postgres', { event: '*', schema: 'public', table: 'subtarefas' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'subtarefas' }, () => {
         buscarTarefas()
       })
       .subscribe()
