@@ -524,7 +524,7 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* Card 3 - Bloqueadas */}
+                {/* Card 3 - Bloqueada */}
                 <div className="bg-white border border-slate-200 rounded-xl md:rounded-2xl p-2.5 md:p-4 shadow-sm flex flex-col md:flex-row items-center justify-center md:justify-between text-center md:text-left">
                   <div className="md:hidden w-7 h-7 bg-amber-50 text-amber-600 rounded-lg flex items-center justify-center mb-1.5">
                     <Lock size={14} strokeWidth={2.5} />
