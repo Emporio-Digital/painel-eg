@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
-import { CheckCircle2, Circle, Lock, Unlock, Plus, RefreshCw, User, Calendar, Folder, Award, Layers, History, ShieldAlert, LogOut, CheckSquare, Trash2, X, KeyRound } from 'lucide-react'
+import { CheckCircle2, Circle, Lock, Unlock, Plus, RefreshCw, User, Calendar, Folder, Award, Layers, History, ShieldAlert, LogOut, CheckSquare, Trash2, X, KeyRound, Edit2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 
 export default function Dashboard() {
@@ -49,8 +49,9 @@ export default function Dashboard() {
   // Filtro de abas internas no mobile
   const [filtroMobile, setFiltroMobile] = useState<'minhas' | 'socio' | 'bloqueadas'>('minhas')
 
-  // Estados do Modal de Criação de Tarefa
+  // Estados do Modal de Criação e Edição de Tarefa
   const [modalAberto, setModalAberto] = useState(false)
+  const [tarefaEditandoId, setTarefaEditandoId] = useState<string | null>(null) // Guarda o ID se estiver editando
   const [formTitulo, setFormTitulo] = useState('')
   const [formNicho, setFormNicho] = useState('Criação de Sites')
   const [formContexto, setFormContexto] = useState<'Marketing' | 'Prospecção'>('Marketing')
@@ -65,14 +66,14 @@ export default function Dashboard() {
   // Controle do Modal de Confirmação (Excluir / Concluir)
   const [modalConfirmacao, setModalConfirmacao] = useState<{aberto: boolean, tipo: 'excluir' | 'concluir' | null, tarefaId: string}>({ aberto: false, tipo: null, tarefaId: '' })
 
-  // Busca tarefas reais do banco de dados
+  // Busca tarefas reais do banco de dados (Ordenadas: 1ª criada no topo, novas embaixo)
   const buscarTarefas = async () => {
     try {
       setCarregando(true)
       const { data, error } = await supabase
         .from('tarefas')
-        .select('*, subtarefas(*)') // Pede a tarefa e a lista de checklists dela
-        .order('criado_em', { ascending: false })
+        .select('*, subtarefas(*)')
+        .order('criado_em', { ascending: true })
 
       if (error) throw error
       if (data) {
@@ -127,51 +128,86 @@ export default function Dashboard() {
     }
   }, [])
 
-  // Função para criar uma tarefa no banco
+  // Função para abrir o modal preenchido para edição
+  const handleAbrirEdicao = (tarefa: any) => {
+    setTarefaEditandoId(tarefa.id)
+    setFormTitulo(tarefa.titulo)
+    setFormNicho(tarefa.nicho)
+    setFormContexto(tarefa.contexto)
+    setFormResponsavel(tarefa.responsavel)
+    setFormPrioridade(tarefa.prioridade || 'media')
+    setFormDependencia(tarefa.dependeDe || '')
+    setFormRecorrente(tarefa.recorrente || false)
+    setFormSubtarefas(tarefa.subtarefas ? tarefa.subtarefas.map((s: any) => s.titulo) : [])
+    setNovaSubtarefa('')
+    setModalAberto(true)
+  }
+
+  // Função para salvar (Criação ou Edição de tarefa)
   const handleSalvarTarefa = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!formTitulo.trim()) return
 
     try {
-      const novaTarefaDB = {
+      const dadosTarefaDB = {
         titulo: formTitulo,
         responsavel_nome: formResponsavel,
         prioridade: formPrioridade,
-        status: 'pendente',
         recorrente: formRecorrente,
         nicho_nome: formNicho,
         contexto: formContexto,
-        depende_de: formDependencia || null, // Se tiver vínculo, salva. Se não, salva nulo.
+        depende_de: formDependencia || null,
         data_planejada: new Date().toISOString().split('T')[0]
       }
 
-      // Insere a tarefa e pede para o Supabase retornar os dados salvos (.select().single())
-      const { data: tarefaSalva, error } = await supabase
-        .from('tarefas')
-        .insert([novaTarefaDB])
-        .select()
-        .single()
+      if (tarefaEditandoId) {
+        // MODO EDIÇÃO: Atualiza a tarefa existente
+        const { error } = await supabase
+          .from('tarefas')
+          .update(dadosTarefaDB)
+          .eq('id', tarefaEditandoId)
 
-      if (error) throw error
+        if (error) throw error
 
-      // Se tiver subtarefas no formulário, salva elas ligadas a esta tarefa
-      if (formSubtarefas.length > 0 && tarefaSalva) {
-        const subsDB = formSubtarefas.map((sub, index) => ({
-          tarefa_pai_id: tarefaSalva.id,
-          titulo: sub,
-          ordem: index
-        }))
-        await supabase.from('subtarefas').insert(subsDB)
+        // Atualiza os checklists: remove os anteriores e insere os novos
+        await supabase.from('subtarefas').delete().eq('tarefa_pai_id', tarefaEditandoId)
+
+        if (formSubtarefas.length > 0) {
+          const subsDB深 = formSubtarefas.map((sub, index) => ({
+            tarefa_pai_id: tarefaEditandoId,
+            titulo: sub,
+            ordem: index
+          }))
+          await supabase.from('subtarefas').insert(subsDB深)
+        }
+      } else {
+        // MODO CRIAÇÃO: Cria nova tarefa
+        const { data: tarefaSalva, error } = await supabase
+          .from('tarefas')
+          .insert([{ ...dadosTarefaDB, status: 'pendente' }])
+          .select()
+          .single()
+
+        if (error) throw error
+
+        if (formSubtarefas.length > 0 && tarefaSalva) {
+          const subsDB = formSubtarefas.map((sub, index) => ({
+            tarefa_pai_id: tarefaSalva.id,
+            titulo: sub,
+            ordem: index
+          }))
+          await supabase.from('subtarefas').insert(subsDB)
+        }
       }
 
       // Limpa formulário e fecha modal
+      setTarefaEditandoId(null)
       setFormTitulo('')
-      setFormDependencia('') // <<< Limpa a dependência aqui!
+      setFormDependencia('')
       setFormSubtarefas([])
       setNovaSubtarefa('')
       setModalAberto(false)
       
-      // Atualiza lista na tela
       buscarTarefas()
     } catch (error) {
       alert('Erro ao salvar tarefa!')
@@ -451,8 +487,8 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {/* Corpo Principal */}
-        <main className="flex-1 p-4 md:p-6 space-y-6 overflow-y-auto max-w-7xl w-full mx-auto pb-24 md:pb-6">
+        {/* Corpo Principal (Com respiro perfeito para o botão flutuante no mobile) */}
+        <main className="flex-1 p-4 md:p-6 space-y-6 overflow-y-auto max-w-7xl w-full mx-auto pb-36 md:pb-8">
           
           {abaAtiva === 'tarefas' && (
             <>
@@ -747,7 +783,14 @@ export default function Dashboard() {
       <div className="fixed bottom-20 md:bottom-8 right-6 z-45">
         <button 
           className="flex items-center gap-2 px-5 py-3.5 rounded-2xl bg-blue-600 text-white font-bold shadow-lg shadow-blue-500/35 hover:bg-blue-700 active:scale-95 transition"
-          onClick={() => setModalAberto(true)}
+          onClick={() => {
+            setTarefaEditandoId(null)
+            setFormTitulo('')
+            setFormDependencia('')
+            setFormSubtarefas([])
+            setNovaSubtarefa('')
+            setModalAberto(true)
+          }}
         >
           <Plus size={18} strokeWidth={2.5} />
           Nova Tarefa
@@ -794,9 +837,14 @@ export default function Dashboard() {
       <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
         <div className="bg-white rounded-3xl border border-slate-200 w-full max-w-md p-5 md:p-6 shadow-xl animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto overscroll-contain">
           <div className="flex justify-between items-center mb-5">
-            <h3 className="text-base font-extrabold text-slate-800">Nova Tarefa</h3>
+            <h3 className="text-base font-extrabold text-slate-800">
+              {tarefaEditandoId ? 'Editar Tarefa' : 'Nova Tarefa'}
+            </h3>
             <button 
-              onClick={() => setModalAberto(false)}
+              onClick={() => {
+                setModalAberto(false)
+                setTarefaEditandoId(null)
+              }}
               className="text-xs font-bold text-slate-400 hover:text-slate-600 px-2 py-1 rounded-lg hover:bg-slate-100"
             >
               Fechar
@@ -1055,9 +1103,23 @@ export default function Dashboard() {
           }`}
         >
           <div className="flex justify-between items-center mb-2.5">
-            <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider font-extrabold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100/40">
-              <Folder size={10} /> {tarefa.nicho}
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider font-extrabold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100/40">
+                <Folder size={10} /> {tarefa.nicho}
+              </span>
+              
+              {/* Tag de Prioridade com Cores Suaves */}
+              <span className={`text-[9px] uppercase tracking-wider font-extrabold px-2 py-0.5 rounded-lg border ${
+                tarefa.prioridade === 'alta'
+                  ? 'bg-rose-50 border-rose-200 text-rose-700'
+                  : tarefa.prioridade === 'media'
+                  ? 'bg-amber-50 border-amber-200 text-amber-700'
+                  : 'bg-slate-50 border-slate-200 text-slate-600'
+              }`}>
+                {tarefa.prioridade || 'baixa'}
+              </span>
+            </div>
+
             {tarefa.recorrente && (
               <span className="text-[9px] text-slate-500 font-bold flex items-center gap-1 bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200/50">
                 <Calendar size={8} /> Recorrente
@@ -1067,19 +1129,27 @@ export default function Dashboard() {
 
           <div className="flex items-start justify-between gap-3">
             <div className="space-y-0.5 flex-1 pr-2">
-              <h4 className={`text-sm font-bold tracking-tight text-slate-800 ${
-                tarefa.status === 'concluido' ? 'line-through text-slate-400' : ''
-              }`}>
+              {/* Título Clicável com Efeito Hover */}
+              <h4 
+                onClick={() => handleAbrirEdicao(tarefa)}
+                className={`text-sm font-bold tracking-tight cursor-pointer transition hover:text-blue-600 active:scale-[0.99] select-none ${
+                  tarefa.status === 'concluido' 
+                    ? 'line-through text-slate-400' 
+                    : 'text-slate-800'
+                }`}
+                title="Clique no título para editar esta tarefa"
+              >
                 {tarefa.titulo}
               </h4>
               <p className="text-[11px] text-slate-400 font-semibold">Responsável: {tarefa.responsavel}</p>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
+            {/* Ações Direitas (Apenas Lixeira e Concluir com espaçamento perfeito) */}
+            <div className="flex items-center gap-3 shrink-0">
               {/* Botão de Excluir */}
               <button 
                 onClick={() => setModalConfirmacao({ aberto: true, tipo: 'excluir', tarefaId: tarefa.id })}
-                className="text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition p-1.5"
+                className="text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition p-1.5 active:scale-95"
                 title="Excluir tarefa"
               >
                 <Trash2 size={16} />
