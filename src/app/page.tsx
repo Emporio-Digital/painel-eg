@@ -967,6 +967,22 @@ export default function Dashboard() {
                 </p>
               </div>
 
+              {/* Botão de Logout exclusivo no Mobile (Bem no final da tela de Indicadores) */}
+              <div className="block md:hidden pt-4 pb-8">
+                <button
+                  type="button"
+                  onClick={() => {
+                    localStorage.removeItem('eg_auth')
+                    setAutenticado(false)
+                    setSenhaInput('')
+                  }}
+                  className="w-full py-4 bg-red-50 hover:bg-red-100 border border-red-200 text-red-600 font-black rounded-2xl text-xs flex items-center justify-center gap-2 active:scale-95 transition shadow-sm"
+                >
+                  <LogOut size={16} strokeWidth={2.5} />
+                  Trancar Painel / Sair da Sessão ({usuarioAtivo})
+                </button>
+              </div>
+
             </div>
           )}
 
@@ -1452,11 +1468,12 @@ export default function Dashboard() {
           onTouchMove={handleTouchMove}
           onTouchEnd={finalizarArraste}
           onTouchCancel={cancelarPress}
+          style={{ touchAction: modoOrdenacaoAtivo ? 'none' : 'auto' }}
           className={`bg-white border rounded-2xl p-4 transition-all duration-200 select-none ${
             sendoArrastada
-              ? 'ring-2 ring-blue-500 shadow-xl scale-[1.03] z-30 opacity-90 border-blue-300 bg-blue-50/20'
+              ? 'ring-2 ring-blue-500 shadow-2xl scale-[1.04] z-30 opacity-95 border-blue-400 bg-blue-50/40'
               : modoOrdenacaoAtivo
-              ? 'opacity-80 border-slate-300'
+              ? 'opacity-70 border-slate-300'
               : estaBloqueada 
               ? 'border-red-100 bg-red-50/20 opacity-70' 
               : tarefa.status === 'concluido'
