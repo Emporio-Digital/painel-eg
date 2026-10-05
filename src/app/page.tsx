@@ -368,7 +368,7 @@ export default function Dashboard() {
       if (typeof navigator !== 'undefined' && navigator.vibrate) {
         navigator.vibrate(50) // Resposta tátil de confirmação
       }
-    }, 450)
+    }, 1000)
   }
 
   // Cancela o timer se soltar antes do tempo
@@ -379,9 +379,19 @@ export default function Dashboard() {
     }
   }
 
-  // Troca a posição e salva no banco
+  // Trava anti-tremor: impede trocas repetidas na mesma fração de segundo
+  const ultimaTrocaRef = React.useRef<number>(0)
+  const ultimoAlvoRef = React.useRef<string | null>(null)
+
+  // Troca a posição e salva no banco de forma suave
   const moverTarefaParaPosicao = async (tarefaAlvoId: string) => {
+    const agora = Date.now()
+    // Se trocou há menos de 180ms ou tá no mesmo alvo, ignora para não tremer
+    if (agora - ultimaTrocaRef.current < 180 || ultimoAlvoRef.current === tarefaAlvoId) return
     if (!tarefaArrastadaId || tarefaArrastadaId === tarefaAlvoId) return
+
+    ultimaTrocaRef.current = agora
+    ultimoAlvoRef.current = tarefaAlvoId
 
     const indexArrastada = tarefas.findIndex(t => t.id === tarefaArrastadaId)
     const indexAlvo = tarefas.findIndex(t => t.id === tarefaAlvoId)
@@ -410,6 +420,7 @@ export default function Dashboard() {
     cancelarPress()
     setTarefaArrastadaId(null)
     setModoOrdenacaoAtivo(false)
+    ultimoAlvoRef.current = null
     // Destrava o scroll da página no mobile
     if (typeof document !== 'undefined') {
       document.body.style.overflow = ''
@@ -420,7 +431,6 @@ export default function Dashboard() {
   const handleTouchMove = (e: React.TouchEvent) => {
     if (!tarefaArrastadaId || !modoOrdenacaoAtivo) return
 
-    // Bloqueia qualquer rolagem de tela durante o movimento
     if (e.cancelable) {
       e.preventDefault()
     }
