@@ -12,10 +12,21 @@ export default function Dashboard() {
   const [verificandoSessao, setVerificandoSessao] = useState(true)
   const [senhaInput, setSenhaInput] = useState('')
   const [erroSenha, setErroSenha] = useState(false)
+  const [usuarioSelecionadoLogin, setUsuarioSelecionadoLogin] = useState<'Luck' | 'Grazy'>('Luck')
 
-  // Verifica se o usuário já fez login antes neste celular/PC
+  // Usuários do sistema
+  const [usuarioAtivo, setUsuarioAtivo] = useState<'Luck' | 'Grazy'>('Luck')
+
+  // Verifica se o usuário já fez login antes neste celular/PC e quem é o dono do aparelho
   useEffect(() => {
     const sessaoSalva = localStorage.getItem('eg_auth')
+    const usuarioSalvo = localStorage.getItem('eg_user') as 'Luck' | 'Grazy' | null
+
+    if (usuarioSalvo) {
+      setUsuarioAtivo(usuarioSalvo)
+      setUsuarioSelecionadoLogin(usuarioSalvo)
+    }
+
     if (sessaoSalva === 'aprovado') {
       setAutenticado(true)
     }
@@ -24,9 +35,11 @@ export default function Dashboard() {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault()
-    // A SENHA OFICIAL DE VOCÊS AQUI:
+    // A SENHA OFICIAL DE VOCÊS:
     if (senhaInput === 'JesusCristo') { 
       localStorage.setItem('eg_auth', 'aprovado')
+      localStorage.setItem('eg_user', usuarioSelecionadoLogin)
+      setUsuarioAtivo(usuarioSelecionadoLogin)
       setAutenticado(true)
       setErroSenha(false)
     } else {
@@ -34,9 +47,6 @@ export default function Dashboard() {
     }
   }
   // -------------------------------------------------------------
-
-  // Usuários do sistema
-  const [usuarioAtivo, setUsuarioAtivo] = useState<'Luck' | 'Grazy'>('Luck')
   const [contexto, setContexto] = useState<'Marketing' | 'Prospecção'>('Marketing')
   
   // Lista de tarefas (inicia vazia para buscarmos do banco de dados/testes)
@@ -66,34 +76,102 @@ export default function Dashboard() {
   // Controle do Modal de Confirmação (Excluir / Concluir)
   const [modalConfirmacao, setModalConfirmacao] = useState<{aberto: boolean, tipo: 'excluir' | 'concluir' | null, tarefaId: string}>({ aberto: false, tipo: null, tarefaId: '' })
 
-  // Busca tarefas reais do banco de dados (Ordenadas: 1ª criada no topo, novas embaixo)
+  // Controle do Modal iOS de Canais e Remessas
+  const [modalRemessasAberto, setModalRemessasAberto] = useState(false)
+  const [tarefaSelecionadaRemessas, setTarefaSelecionadaRemessas] = useState<any | null>(null)
+  const [canalSelecionado, setCanalSelecionado] = useState<any | null>(null) // Para navegar até o nível 2
+
+  // Alterna uma remessa específica (ex: Remessa 1, 2, 3...)
+  const handleToggleRemessa = async (subtarefaId: string, numeroRemessa: number) => {
+    if (!tarefaSelecionadaRemessas) return
+
+    const subAlvo = tarefaSelecionadaRemessas.subtarefas?.find((s: any) => s.id === subtarefaId)
+    if (!subAlvo) return
+
+    const remessasAtuais: number[] = subAlvo.remessas_feitas || []
+    const jaFez = remessasAtuais.includes(numeroRemessa)
+    const novasRemessas = jaFez 
+      ? remessasAtuais.filter(r => r !== numeroRemessa)
+      : [...remessasAtuais, numeroRemessa]
+
+    // Se concluiu todas as 5 remessas, podemos marcar concluida = true
+    const totalSlots = subAlvo.remessas_total || 5
+    const estaCompleto = novasRemessas.length >= totalSlots
+
+    // Atualização otimista na tela na hora
+    const subAtualizada = { ...subAlvo, remessas_feitas: novasRemessas, concluida: estaCompleto }
+    const tarefasAtualizadas = tarefas.map(t => {
+      if (t.id === tarefaSelecionadaRemessas.id) {
+        return {
+          ...t,
+          subtarefas: t.subtarefas.map((s: any) => s.id === subtarefaId ? subAtualizada : s)
+        }
+      }
+      return t
+    })
+    setTarefas(tarefasAtualizadas)
+    setTarefaSelecionadaRemessas({
+      ...tarefaSelecionadaRemessas,
+      subtarefas: tarefaSelecionadaRemessas.subtarefas.map((s: any) => s.id === subtarefaId ? subAtualizada : s)
+    })
+    if (canalSelecionado?.id === subtarefaId) {
+      setCanalSelecionado(subAtualizada)
+    }
+
+    try {
+      await supabase
+        .from('subtarefas')
+        .update({ remessas_feitas: novasRemessas, concluida: estaCompleto })
+        .eq('id', subtarefaId)
+    } catch (err) {
+      console.error('Erro ao atualizar remessa:', err)
+      buscarTarefas()
+    }
+  }
+
+  // Estado para controlar a tarefa que está sendo arrastada no momento
+  const [tarefaArrastadaId, setTarefaArrastadaId] = useState<string | null>(null)
+
+  // Busca tarefas reais do banco de dados (Ordenadas pelo campo ordem manual)
   const buscarTarefas = async () => {
     try {
       setCarregando(true)
       const { data, error } = await supabase
         .from('tarefas')
         .select('*, subtarefas(*)')
-        .order('criado_em', { ascending: true })
+        .order('ordem', { ascending: true })
 
       if (error) throw error
       if (data) {
-        const tarefasFormatadas = data.map((t: any) => {
-          // Ordena as subtarefas pela ordem de criação
-          const subsOrdenadas = t.subtarefas?.sort((a: any, b: any) => a.ordem - b.ordem) || []
+        const hojeStr = new Date().toISOString().split('T')[0]
+
+        const tarefasFormatadas = await Promise.all(data.map(async (t: any) => {
+          const subsOrdenadas = t.subtarefas?.sort((a: any, b: any) => (a.ordem ?? 0) - (b.ordem ?? 0)) || []
           
+          // Se for recorrente, mas foi concluída em um dia anterior, reseta para pendente automaticamente
+          let statusAtual = t.status
+          if (t.recorrente && t.status === 'concluido' && t.ultima_conclusao && t.ultima_conclusao < hojeStr) {
+            statusAtual = 'pendente'
+            // Atualiza no banco em background para o novo ciclo
+            await supabase.from('tarefas').update({ status: 'pendente' }).eq('id', t.id)
+            await supabase.from('subtarefas').update({ concluida: false, remessas_feitas: [] }).eq('tarefa_pai_id', t.id)
+          }
+
           return {
             id: t.id,
             titulo: t.titulo,
             responsavel: t.responsavel_nome || 'Luck',
-            status: t.status,
+            status: statusAtual,
             nicho: t.nicho_nome || 'EG',
             contexto: t.contexto || 'Marketing',
             prioridade: t.prioridade,
             recorrente: t.recorrente,
+            ordem: t.ordem ?? 0,
+            ultimaConclusao: t.ultima_conclusao,
             subtarefas: subsOrdenadas,
-            dependeDe: t.depende_de // Agora puxa o cadeado de verdade do banco!
+            dependeDe: t.depende_de
           }
-        })
+        }))
         setTarefas(tarefasFormatadas)
       }
     } catch (error) {
@@ -215,22 +293,26 @@ export default function Dashboard() {
     }
   }
 
-  // Salva o novo status diretamente no banco de dados em tempo real
+  // Salva o novo status e a data da última conclusão
   const handleToggleTarefaStatus = async (tarefaId: string) => {
     const tarefaAlvo = tarefas.find(t => t.id === tarefaId)
     if (!tarefaAlvo) return
 
-    const novoStatus = tarefaAlvo.status === 'concluido' ? 'pendente' : 'concluido'
+    const vaiConcluir = tarefaAlvo.status !== 'concluido'
+    const novoStatus = vaiConcluir ? 'concluido' : 'pendente'
+    const hojeStr = new Date().toISOString().split('T')[0]
 
     try {
       const { error } = await supabase
         .from('tarefas')
-        .update({ status: novoStatus })
+        .update({ 
+          status: novoStatus,
+          ultima_conclusao: vaiConcluir ? hojeStr : null 
+        })
         .eq('id', tarefaId)
 
       if (error) throw error
       
-      // Recarrega do banco para garantir consistência
       buscarTarefas()
     } catch (error) {
       console.error('Erro ao atualizar status da tarefa:', error)
@@ -267,10 +349,87 @@ export default function Dashboard() {
     return tarefaBloqueadora ? tarefaBloqueadora.status !== 'concluido' : false
   }
 
-  // Filtros de tarefas (Leva em consideração o Contexto ativo no topo da tela)
+  // -------------------------------------------------------------
+  // CONTROLE DE ARRASTAR E SOLTAR NATIVO (MOUSE + TOUCH MOBILE)
+  // -------------------------------------------------------------
+  const timerLongPressRef = React.useRef<NodeJS.Timeout | null>(null)
+  const [modoOrdenacaoAtivo, setModoOrdenacaoAtivo] = useState(false)
+
+  // Inicia o timer de 550ms ao pressionar
+  const iniciarPress = (tarefaId: string) => {
+    cancelarPress()
+    timerLongPressRef.current = setTimeout(() => {
+      setTarefaArrastadaId(tarefaId)
+      setModoOrdenacaoAtivo(true)
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate(40) // Vibração tátil sutil no mobile se suportado
+      }
+    }, 550)
+  }
+
+  // Cancela o timer se soltar antes do tempo
+  const cancelarPress = () => {
+    if (timerLongPressRef.current) {
+      clearTimeout(timerLongPressRef.current)
+      timerLongPressRef.current = null
+    }
+  }
+
+  // Troca a posição e salva no banco
+  const moverTarefaParaPosicao = async (tarefaAlvoId: string) => {
+    if (!tarefaArrastadaId || tarefaArrastadaId === tarefaAlvoId) return
+
+    const indexArrastada = tarefas.findIndex(t => t.id === tarefaArrastadaId)
+    const indexAlvo = tarefas.findIndex(t => t.id === tarefaAlvoId)
+
+    if (indexArrastada === -1 || indexAlvo === -1) return
+
+    const novaLista = [...tarefas]
+    const [tarefaMovida] = novaLista.splice(indexArrastada, 1)
+    novaLista.splice(indexAlvo, 0, tarefaMovida)
+
+    const listaComNovaOrdem = novaLista.map((t, idx) => ({ ...t, ordem: idx }))
+    setTarefas(listaComNovaOrdem)
+
+    try {
+      const updates = listaComNovaOrdem.map(t => 
+        supabase.from('tarefas').update({ ordem: t.ordem }).eq('id', t.id)
+      )
+      await Promise.all(updates)
+    } catch (err) {
+      console.error('Erro ao salvar ordem no banco:', err)
+      buscarTarefas()
+    }
+  }
+
+  const finalizarArraste = () => {
+    cancelarPress()
+    setTarefaArrastadaId(null)
+    setModoOrdenacaoAtivo(false)
+  }
+
+  // Suporte a toque contínuo no mobile (Arrastar pelo touch)
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!tarefaArrastadaId || !modoOrdenacaoAtivo) return
+    const touch = e.touches[0]
+    const elementoSobDedo = document.elementFromPoint(touch.clientX, touch.clientY)
+    const cardAlvo = elementoSobDedo?.closest('[data-tarefa-id]') as HTMLElement
+    if (cardAlvo) {
+      const idAlvo = cardAlvo.getAttribute('data-tarefa-id')
+      if (idAlvo && idAlvo !== tarefaArrastadaId) {
+        moverTarefaParaPosicao(idAlvo)
+      }
+    }
+  }
+  // -------------------------------------------------------------
+
+  // Filtros de tarefas (Leva em consideração o Contexto ativo e esconde tarefas já concluídas)
   const obterTarefasPorFiltro = (tipo: 'minhas' | 'socio' | 'bloqueadas') => {
     return tarefas.filter(tarefa => {
-      // Regra 1: A tarefa pertence ao contexto ativo no painel (Marketing ou Prospecção)?
+      // Tarefas concluídas não devem aparecer no fluxo de execução ativo
+      if (tarefa.status === 'concluido') return false
+
+      // Regra: Pertence ao contexto ativo no painel (Marketing ou Prospecção)?
       if (tarefa.contexto && tarefa.contexto !== contexto) return false
 
       const bloqueada = verificarBloqueio(tarefa)
@@ -290,41 +449,76 @@ export default function Dashboard() {
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 antialiased selection:bg-blue-900">
         <div className="w-full max-w-sm animate-in fade-in slide-in-from-bottom-4 duration-500">
           
-          <div className="flex flex-col items-center text-center mb-8">
-            <div className="w-24 h-24 bg-slate-900 rounded-3xl p-1 mb-4 shadow-2xl shadow-blue-900/20 border border-slate-800">
+          <div className="flex flex-col items-center text-center mb-6">
+            <div className="w-20 h-20 bg-slate-900 rounded-3xl p-1 mb-3 shadow-2xl shadow-blue-900/20 border border-slate-800 flex items-center justify-center">
               <img src="/logo-eg.png" alt="Logo EG" className="w-full h-full object-contain" />
             </div>
             <h1 className="text-xl font-black text-white tracking-tight uppercase">EG Empório Digital</h1>
-            <p className="text-sm font-semibold text-slate-400 mt-1">Acesso Restrito às Operações</p>
+            <p className="text-xs font-semibold text-slate-400 mt-1">Selecione quem está acessando</p>
           </div>
 
-          <form onSubmit={handleLogin} className="bg-slate-900/50 backdrop-blur-xl border border-slate-800 p-6 rounded-3xl shadow-xl">
-            <div className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Senha de Operações</label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <KeyRound size={16} className={erroSenha ? "text-red-500" : "text-blue-500"} />
-                  </div>
-                  <input 
-                    type="password" 
-                    value={senhaInput}
-                    onChange={(e) => setSenhaInput(e.target.value)}
-                    placeholder="••••••••"
-                    className={`w-full bg-slate-950 border ${erroSenha ? 'border-red-900 focus:border-red-500' : 'border-slate-800 focus:border-blue-500'} text-white rounded-2xl pl-11 pr-4 py-3.5 text-sm focus:outline-none transition`}
-                    required
-                  />
-                </div>
-                {erroSenha && <p className="text-[10px] font-bold text-red-500 ml-1 mt-1">Senha incorreta. Tente novamente.</p>}
-              </div>
-
-              <button 
-                type="submit" 
-                className="w-full py-3.5 bg-blue-600 text-white font-bold rounded-2xl text-sm hover:bg-blue-700 active:scale-[0.98] transition shadow-lg shadow-blue-900/30"
+          <form onSubmit={handleLogin} className="bg-slate-900/50 backdrop-blur-xl border border-slate-800 p-6 rounded-3xl shadow-xl space-y-5">
+            
+            {/* Seletor de Perfil: Luck ou Grazy */}
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setUsuarioSelecionadoLogin('Luck')}
+                className={`py-3.5 px-3 rounded-2xl border text-xs font-black transition-all flex flex-col items-center gap-1.5 active:scale-95 ${
+                  usuarioSelecionadoLogin === 'Luck'
+                    ? 'bg-blue-600/20 border-blue-500 text-blue-300 shadow-md shadow-blue-500/20'
+                    : 'bg-slate-950/60 border-slate-800 text-slate-500 hover:text-slate-300'
+                }`}
               >
-                Desbloquear Painel
+                <div className={`p-2 rounded-xl ${usuarioSelecionadoLogin === 'Luck' ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-400'}`}>
+                  <User size={16} strokeWidth={2.5} />
+                </div>
+                Luck
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setUsuarioSelecionadoLogin('Grazy')}
+                className={`py-3.5 px-3 rounded-2xl border text-xs font-black transition-all flex flex-col items-center gap-1.5 active:scale-95 ${
+                  usuarioSelecionadoLogin === 'Grazy'
+                    ? 'bg-pink-600/20 border-pink-500 text-pink-300 shadow-md shadow-pink-500/20'
+                    : 'bg-slate-950/60 border-slate-800 text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                <div className={`p-2 rounded-xl ${usuarioSelecionadoLogin === 'Grazy' ? 'bg-pink-500 text-white' : 'bg-slate-800 text-slate-400'}`}>
+                  <User size={16} strokeWidth={2.5} />
+                </div>
+                Grazy
               </button>
             </div>
+
+            {/* Input da Senha */}
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider ml-1">
+                Senha de Acesso ({usuarioSelecionadoLogin})
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                  <KeyRound size={16} className={erroSenha ? "text-red-500" : "text-blue-500"} />
+                </div>
+                <input 
+                  type="password" 
+                  value={senhaInput}
+                  onChange={(e) => setSenhaInput(e.target.value)}
+                  placeholder="••••••••"
+                  className={`w-full bg-slate-950 border ${erroSenha ? 'border-red-900 focus:border-red-500' : 'border-slate-800 focus:border-blue-500'} text-white rounded-2xl pl-11 pr-4 py-3.5 text-sm focus:outline-none transition`}
+                  required
+                />
+              </div>
+              {erroSenha && <p className="text-[10px] font-bold text-red-500 ml-1 mt-1">Senha incorreta. Tente novamente.</p>}
+            </div>
+
+            <button 
+              type="submit" 
+              className="w-full py-3.5 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-2xl text-sm active:scale-[0.98] transition shadow-lg shadow-blue-900/40"
+            >
+              Entrar como {usuarioSelecionadoLogin}
+            </button>
           </form>
 
         </div>
@@ -1075,6 +1269,154 @@ export default function Dashboard() {
         </div>
       </div>
     )}
+
+    {/* ------------------------------------------------------------------ */}
+    {/* MODAL DESLIZANTE ESTILO iOS (Específico para Vídeos de Canais) */}
+    {/* ------------------------------------------------------------------ */}
+    {modalRemessasAberto && tarefaSelecionadaRemessas && (
+      <div className="fixed inset-0 z-[65] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-3 md:p-6 animate-in fade-in duration-200">
+        <div className="bg-white border border-slate-200 text-slate-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[88vh] animate-in zoom-in-95 duration-200">
+          
+          {/* Top Bar Estilo iOS */}
+          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/80 backdrop-blur">
+            <div className="flex items-center gap-2">
+              {canalSelecionado ? (
+                <button 
+                  onClick={() => setCanalSelecionado(null)}
+                  className="flex items-center gap-1 text-xs font-black text-blue-600 hover:text-blue-700 transition py-1 pr-2"
+                >
+                  ‹ Contas
+                </button>
+              ) : (
+                <span className="text-[10px] uppercase font-black tracking-widest text-slate-400">
+                  {tarefaSelecionadaRemessas.titulo}
+                </span>
+              )}
+            </div>
+
+            <h3 className="text-sm font-black text-slate-800 truncate max-w-[200px] text-center">
+              {canalSelecionado ? canalSelecionado.titulo : 'Canais Cadastrados'}
+            </h3>
+
+            {/* BOTÃO CONCLUÍDO RÁPIDO (Salva e Fecha Instantaneamente) */}
+            <button
+              onClick={() => {
+                setModalRemessasAberto(false)
+                setCanalSelecionado(null)
+                setTarefaSelecionadaRemessas(null)
+              }}
+              className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs px-3.5 py-1.5 rounded-xl shadow-md shadow-emerald-500/20 active:scale-95 transition"
+            >
+              Concluído
+            </button>
+          </div>
+
+          {/* Área com Transição Deslizante Estilo iOS */}
+          <div className="flex-1 overflow-y-auto p-4 md:p-5">
+            {!canalSelecionado ? (
+              // NÍVEL 1: LISTA DE CONTAS / CANAIS
+              <div className="space-y-2.5 animate-in slide-in-from-left duration-200">
+                <div className="mb-2 px-1">
+                  <p className="text-xs font-bold text-slate-500">Toque em um canal para registrar as postagens:</p>
+                </div>
+
+                {tarefaSelecionadaRemessas.subtarefas?.length === 0 ? (
+                  <div className="text-center py-10 text-slate-400 text-xs font-medium">
+                    Nenhum canal cadastrado nesta tarefa.
+                  </div>
+                ) : (
+                  tarefaSelecionadaRemessas.subtarefas.map((sub: any) => {
+                    const totalSlots = sub.remessas_total || 5
+                    const concluidos = (sub.remessas_feitas || []).length
+                    const pct = Math.round((concluidos / totalSlots) * 100)
+
+                    return (
+                      <div
+                        key={sub.id}
+                        onClick={() => setCanalSelecionado(sub)}
+                        className="w-full flex items-center justify-between p-3.5 bg-slate-50 hover:bg-blue-50/50 border border-slate-200 hover:border-blue-200 rounded-2xl cursor-pointer active:scale-[0.99] transition group"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`w-3 h-3 rounded-full ${concluidos >= totalSlots ? 'bg-emerald-500' : concluidos > 0 ? 'bg-blue-500' : 'bg-slate-300'}`}></div>
+                          <div className="text-left">
+                            <span className="text-sm font-bold text-slate-700 group-hover:text-blue-900 transition">
+                              {sub.titulo}
+                            </span>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <span className="text-[10px] font-semibold text-slate-400">
+                                {concluidos} de {totalSlots} vídeos postados
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 text-slate-400 group-hover:text-blue-600 font-bold text-xs">
+                          <span>{pct}%</span>
+                          <span className="text-base leading-none">›</span>
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            ) : (
+              // NÍVEL 2: AS REMESSAS DO CANAL ESCOLHIDO
+              <div className="space-y-4 animate-in slide-in-from-right duration-200">
+                <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] font-black uppercase tracking-wider text-blue-600 block">Canal Ativo</span>
+                    <h4 className="text-sm font-black text-slate-800">{canalSelecionado.titulo}</h4>
+                  </div>
+                  <span className="text-xs font-black bg-blue-100 text-blue-700 px-2.5 py-1 rounded-xl">
+                    {(canalSelecionado.remessas_feitas || []).length} de {canalSelecionado.remessas_total || 5} Feitos
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider px-1">Remessas de Vídeo:</p>
+                  
+                  {Array.from({ length: canalSelecionado.remessas_total || 5 }).map((_, index) => {
+                    const numeroRemessa = index + 1
+                    const estaFeita = (canalSelecionado.remessas_feitas || []).includes(numeroRemessa)
+
+                    return (
+                      <button
+                        key={numeroRemessa}
+                        type="button"
+                        onClick={() => handleToggleRemessa(canalSelecionado.id, numeroRemessa)}
+                        className={`w-full flex items-center justify-between p-3.5 rounded-2xl border transition active:scale-[0.98] ${
+                          estaFeita
+                            ? 'bg-emerald-50/70 border-emerald-300 text-emerald-800'
+                            : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`w-7 h-7 rounded-xl flex items-center justify-center font-black text-xs ${
+                            estaFeita ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-600'
+                          }`}>
+                            {numeroRemessa}
+                          </div>
+                          <span className={`text-xs font-bold ${estaFeita ? 'line-through text-slate-400' : 'text-slate-700'}`}>
+                            Remessa {numeroRemessa} (Vídeo {numeroRemessa})
+                          </span>
+                        </div>
+
+                        {estaFeita ? (
+                          <CheckCircle2 size={18} className="text-emerald-600" />
+                        ) : (
+                          <Circle size={18} className="text-slate-300" />
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+        </div>
+      </div>
+    )}
     </div>
   )
 
@@ -1090,16 +1432,36 @@ export default function Dashboard() {
 
     return lista.map(tarefa => {
       const estaBloqueada = verificarBloqueio(tarefa)
+      const sendoArrastada = tarefaArrastadaId === tarefa.id
 
       return (
         <div 
           key={tarefa.id}
-          className={`bg-white border rounded-2xl p-4 transition-all duration-200 shadow-sm ${
-            estaBloqueada 
+          data-tarefa-id={tarefa.id}
+          // Eventos para Desktop (Mouse)
+          onMouseDown={() => !estaBloqueada && iniciarPress(tarefa.id)}
+          onMouseUp={finalizarArraste}
+          onMouseLeave={cancelarPress}
+          onMouseEnter={() => {
+            if (tarefaArrastadaId && tarefaArrastadaId !== tarefa.id) {
+              moverTarefaParaPosicao(tarefa.id)
+            }
+          }}
+          // Eventos para Celular / Mobile (Touch)
+          onTouchStart={() => !estaBloqueada && iniciarPress(tarefa.id)}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={finalizarArraste}
+          onTouchCancel={cancelarPress}
+          className={`bg-white border rounded-2xl p-4 transition-all duration-200 select-none ${
+            sendoArrastada
+              ? 'ring-2 ring-blue-500 shadow-xl scale-[1.03] z-30 opacity-90 border-blue-300 bg-blue-50/20'
+              : modoOrdenacaoAtivo
+              ? 'opacity-80 border-slate-300'
+              : estaBloqueada 
               ? 'border-red-100 bg-red-50/20 opacity-70' 
               : tarefa.status === 'concluido'
               ? 'border-slate-100 opacity-60 bg-slate-50/40'
-              : 'border-slate-200 hover:border-slate-300'
+              : 'border-slate-200 hover:border-slate-300 shadow-sm'
           }`}
         >
           <div className="flex justify-between items-center mb-2.5">
@@ -1128,8 +1490,8 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-start justify-between gap-3">
+            {/* Título Clicável Padronizado: Sempre abre para editar a tarefa */}
             <div className="space-y-0.5 flex-1 pr-2">
-              {/* Título Clicável com Efeito Hover */}
               <h4 
                 onClick={() => handleAbrirEdicao(tarefa)}
                 className={`text-sm font-bold tracking-tight cursor-pointer transition hover:text-blue-600 active:scale-[0.99] select-none ${
@@ -1137,16 +1499,15 @@ export default function Dashboard() {
                     ? 'line-through text-slate-400' 
                     : 'text-slate-800'
                 }`}
-                title="Clique no título para editar esta tarefa"
+                title="Clique para editar a tarefa"
               >
                 {tarefa.titulo}
               </h4>
               <p className="text-[11px] text-slate-400 font-semibold">Responsável: {tarefa.responsavel}</p>
             </div>
 
-            {/* Ações Direitas (Apenas Lixeira e Concluir com espaçamento perfeito) */}
+            {/* Ações Direitas (Lixeira e Concluir) */}
             <div className="flex items-center gap-3 shrink-0">
-              {/* Botão de Excluir */}
               <button 
                 onClick={() => setModalConfirmacao({ aberto: true, tipo: 'excluir', tarefaId: tarefa.id })}
                 className="text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition p-1.5 active:scale-95"
@@ -1155,14 +1516,13 @@ export default function Dashboard() {
                 <Trash2 size={16} />
               </button>
 
-              {/* Botão Concluir Tarefa */}
               <button 
                 onClick={() => {
                   if (!estaBloqueada) {
                     if (tarefa.status !== 'concluido') {
-                      setModalConfirmacao({ aberto: true, tipo: 'concluir', tarefaId: tarefa.id }) // Abre modal para concluir
+                      setModalConfirmacao({ aberto: true, tipo: 'concluir', tarefaId: tarefa.id })
                     } else {
-                      handleToggleTarefaStatus(tarefa.id) // Desfazer conclusão continua direto, sem chatice
+                      handleToggleTarefaStatus(tarefa.id)
                     }
                   }
                 }}
@@ -1182,32 +1542,77 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Subtarefas (Checklist) na tela principal */}
+          {/* Subtarefas / Checklist Inteligente */}
           {tarefa.subtarefas && tarefa.subtarefas.length > 0 && (
             <div className="mt-4 pt-3 border-t border-slate-100 space-y-1.5">
+              
+              {/* Cabeçalho do Checklist */}
               <div className="flex justify-between text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-2">
-                <span>Checklist</span>
-                <span>{tarefa.subtarefas.filter((s:any) => s.concluida).length}/{tarefa.subtarefas.length}</span>
+                <span>{tarefa.nicho === 'Vídeos para Canais' ? 'Canais Cadastrados' : 'Checklist'}</span>
+                <span>
+                  {tarefa.nicho === 'Vídeos para Canais' 
+                    ? `${tarefa.subtarefas.length} canais`
+                    : `${tarefa.subtarefas.filter((s:any) => s.concluida).length}/${tarefa.subtarefas.length}`}
+                </span>
               </div>
               
-              {tarefa.subtarefas.map((sub: any) => (
-                <div 
-                  key={sub.id}
-                  onClick={() => !estaBloqueada && handleToggleSubtarefa(sub.id, sub.concluida)}
-                  className={`flex items-start gap-2 p-1.5 rounded-lg text-xs cursor-pointer select-none transition ${
-                    sub.concluida ? 'text-slate-400 bg-slate-50' : 'text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  {sub.concluida ? (
-                    <CheckCircle2 size={14} className="text-emerald-500 shrink-0 mt-0.5" />
-                  ) : (
-                    <Circle size={14} className="text-slate-300 shrink-0 mt-0.5" />
-                  )}
-                  <span className={sub.concluida ? 'line-through' : 'font-medium leading-tight'}>
-                    {sub.titulo}
-                  </span>
-                </div>
-              ))}
+              {/* SE FOR VÍDEOS PARA CANAIS: Mostra os canais e o resumo de vídeos, abrindo a subjanela */}
+              {tarefa.nicho === 'Vídeos para Canais' ? (
+                tarefa.subtarefas.map((sub: any) => {
+                  const feitas = (sub.remessas_feitas || []).length
+                  const total = sub.remessas_total || 5
+                  const tudoFeito = feitas >= total
+
+                  return (
+                    <div 
+                      key={sub.id}
+                      onClick={() => {
+                        if (!estaBloqueada) {
+                          setTarefaSelecionadaRemessas(tarefa)
+                          setCanalSelecionado(sub)
+                          setModalRemessasAberto(true)
+                        }
+                      }}
+                      className="flex items-center justify-between p-2 rounded-xl text-xs cursor-pointer select-none bg-slate-50/80 hover:bg-blue-50/60 border border-slate-100 hover:border-blue-200 transition group"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full ${tudoFeito ? 'bg-emerald-500' : feitas > 0 ? 'bg-blue-500' : 'bg-slate-300'}`}></div>
+                        <span className="font-semibold text-slate-700 group-hover:text-blue-900">{sub.titulo}</span>
+                      </div>
+                      <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-lg border ${
+                        tudoFeito
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                          : feitas > 0
+                          ? 'bg-blue-50 border-blue-200 text-blue-700'
+                          : 'bg-white border-slate-200 text-slate-500'
+                      }`}>
+                        {feitas}/{total} vídeos
+                      </span>
+                    </div>
+                  )
+                })
+              ) : (
+                /* DEMAIS NICHOS (Automação, Sites, etc.): O checklist tradicional simples que você marca e risca */
+                tarefa.subtarefas.map((sub: any) => (
+                  <div 
+                    key={sub.id}
+                    onClick={() => !estaBloqueada && handleToggleSubtarefa(sub.id, sub.concluida)}
+                    className={`flex items-start gap-2 p-1.5 rounded-lg text-xs cursor-pointer select-none transition ${
+                      sub.concluida ? 'text-slate-400 bg-slate-50' : 'text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {sub.concluida ? (
+                      <CheckCircle2 size={14} className="text-emerald-500 shrink-0 mt-0.5" />
+                    ) : (
+                      <Circle size={14} className="text-slate-300 shrink-0 mt-0.5" />
+                    )}
+                    <span className={sub.concluida ? 'line-through' : 'font-medium leading-tight'}>
+                      {sub.titulo}
+                    </span>
+                  </div>
+                ))
+              )}
+
             </div>
           )}
         </div>
