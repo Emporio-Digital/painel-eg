@@ -350,21 +350,25 @@ export default function Dashboard() {
   }
 
   // -------------------------------------------------------------
-  // CONTROLE DE ARRASTAR E SOLTAR NATIVO (MOUSE + TOUCH MOBILE)
+  // CONTROLE DE ARRASTAR E SOLTAR NATIVO (MOUSE + TOUCH MOBILE COM TRAVA DE SCROLL)
   // -------------------------------------------------------------
   const timerLongPressRef = React.useRef<NodeJS.Timeout | null>(null)
   const [modoOrdenacaoAtivo, setModoOrdenacaoAtivo] = useState(false)
 
-  // Inicia o timer de 550ms ao pressionar
+  // Inicia o timer de 450ms ao pressionar
   const iniciarPress = (tarefaId: string) => {
     cancelarPress()
     timerLongPressRef.current = setTimeout(() => {
       setTarefaArrastadaId(tarefaId)
       setModoOrdenacaoAtivo(true)
-      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        navigator.vibrate(40) // Vibração tátil sutil no mobile se suportado
+      // Trava o scroll da página no mobile enquanto arrasta
+      if (typeof document !== 'undefined') {
+        document.body.style.overflow = 'hidden'
       }
-    }, 550)
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate(50) // Resposta tátil de confirmação
+      }
+    }, 450)
   }
 
   // Cancela o timer se soltar antes do tempo
@@ -406,11 +410,21 @@ export default function Dashboard() {
     cancelarPress()
     setTarefaArrastadaId(null)
     setModoOrdenacaoAtivo(false)
+    // Destrava o scroll da página no mobile
+    if (typeof document !== 'undefined') {
+      document.body.style.overflow = ''
+    }
   }
 
-  // Suporte a toque contínuo no mobile (Arrastar pelo touch)
+  // Suporte a toque contínuo no mobile (Move o card e impede a rolagem da página)
   const handleTouchMove = (e: React.TouchEvent) => {
     if (!tarefaArrastadaId || !modoOrdenacaoAtivo) return
+
+    // Bloqueia qualquer rolagem de tela durante o movimento
+    if (e.cancelable) {
+      e.preventDefault()
+    }
+
     const touch = e.touches[0]
     const elementoSobDedo = document.elementFromPoint(touch.clientX, touch.clientY)
     const cardAlvo = elementoSobDedo?.closest('[data-tarefa-id]') as HTMLElement
